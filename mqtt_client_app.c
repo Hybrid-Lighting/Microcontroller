@@ -47,6 +47,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <mqueue.h>
+#include <stdio.h>
 
 #include <ti/drivers/net/wifi/simplelink.h>
 #include <ti/drivers/net/wifi/slnetifwifi.h>
@@ -99,6 +100,9 @@ extern int32_t ti_net_SlNet_initConfig();
 #define MQTT_CONNECTION_ADDRESS         "192.168.178.67"
 #define MQTT_CONNECTION_PORT_NUMBER     8883
 #endif
+
+char accuPercentageString[32];
+int accuPercentage = 0;
 
 mqd_t appQueue;
 int connected;
@@ -619,6 +623,8 @@ void mainThread(void * args){
 
 MQTT_DEMO:
 
+    accuPercentage = 0;
+
     ret = MQTT_IF_Init(mqttInitParams);
     if(ret < 0){
         while(1);
@@ -663,11 +669,17 @@ MQTT_DEMO:
 
             LOG_INFO("APP_MQTT_PUBLISH\r\n");
 
+            snprintf(accuPercentageString, sizeof accuPercentageString, "%d\r\n", accuPercentage);
+
+            char* stringToSend = accuPercentageString;
+
             MQTT_IF_Publish(mqttClientHandle,
-                            "ems20/0974347/LED1",
-                            "LED 1 toggle\r\n",
-                            strlen("LED 1 toggle\r\n"),
+                            "ems20/0974347/Accu",
+                            stringToSend,
+                            strlen(stringToSend),
                             MQTT_QOS_2);
+
+            accuPercentage += 10;
 
             GPIO_clearInt(CONFIG_GPIO_BUTTON_0);
             GPIO_enableInt(CONFIG_GPIO_BUTTON_0);
