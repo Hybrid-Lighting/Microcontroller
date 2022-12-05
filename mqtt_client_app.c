@@ -112,6 +112,7 @@ mqd_t appQueue;
 int connected;
 int deinit;
 Timer_Handle timer0;
+Timer_Handle timer1;
 int longPress = 0;
 
 /* Client ID                                                                 */
@@ -308,6 +309,21 @@ void timerLEDCallback(Timer_Handle myHandle)
     GPIO_toggle(CONFIG_GPIO_LED_0);
 }
 
+void timerTestCallback(Timer_Handle myHandle){
+    GPIO_toggle(CONFIG_GPIO_LED_2);
+
+    int ret;
+    struct msgQueue queueElement;
+
+    queueElement.event = APP_MQTT_PUBLISH;
+    ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
+    if(ret < 0){
+        LOG_ERROR("msg queue send error %d", ret);
+    }
+
+    accuPercentage += 1;
+}
+
 void pushButtonPublishHandler(uint_least8_t index)
 {
     int ret;
@@ -320,6 +336,11 @@ void pushButtonPublishHandler(uint_least8_t index)
     if(ret < 0){
         LOG_ERROR("msg queue send error %d", ret);
     }
+
+    accuPercentage += 5;
+
+    GPIO_clearInt(CONFIG_GPIO_BUTTON_0);
+    GPIO_enableInt(CONFIG_GPIO_BUTTON_0);
 }
 
 void pushButtonConnectionHandler(uint_least8_t index)
@@ -563,6 +584,7 @@ void mainThread(void * args){
     int32_t ret;
     mq_attr attr;
     Timer_Params params;
+    Timer_Params params1;
     UART_Handle uartHandle;
     struct msgQueue queueElement;
     MQTTClient_Handle mqttClientHandle;
@@ -596,7 +618,7 @@ void mainThread(void * args){
 
     timer0 = Timer_open(CONFIG_TIMER_0, &params);
     if (timer0 == NULL) {
-        LOG_ERROR("failed to initialize timer\r\n");
+        LOG_ERROR("failed to initialize timer 0\r\n");
         while(1);
     }
 
@@ -623,9 +645,27 @@ void mainThread(void * args){
 
     timer0 = Timer_open(CONFIG_TIMER_0, &params);
     if (timer0 == NULL) {
-        LOG_ERROR("failed to initialize timer\r\n");
+        LOG_ERROR("failed to initialize timer 0\r\n");
         while(1);
     }
+
+    Timer_Params_init(&params1);
+    params1.period = 2000000;
+    params1.periodUnits = Timer_PERIOD_US;
+    params1.timerMode = Timer_CONTINUOUS_CALLBACK;
+    params1.timerCallback = (Timer_CallBackFxn)timerTestCallback;
+
+    timer1 = Timer_open(CONFIG_TIMER_1, &params1);
+    if (timer1 == NULL) {
+        LOG_ERROR("failed to initialize timer 1\r\n");
+        while(1);
+    }
+
+    ret = Timer_start(timer1);
+    if(ret < 0){
+        LOG_ERROR("failed to start the timer\r\n");
+    }
+
 
 MQTT_DEMO:
 
@@ -685,10 +725,8 @@ MQTT_DEMO:
                             strlen(stringToSend),
                             MQTT_QOS_2);
 
-            accuPercentage += 10;
-
-            GPIO_clearInt(CONFIG_GPIO_BUTTON_0);
-            GPIO_enableInt(CONFIG_GPIO_BUTTON_0);
+//            GPIO_clearInt(CONFIG_GPIO_BUTTON_0);
+//            GPIO_enableInt(CONFIG_GPIO_BUTTON_0);
         }
         else if(queueElement.event == APP_MQTT_CON_TOGGLE){
 
