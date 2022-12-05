@@ -84,7 +84,9 @@ extern int32_t ti_net_SlNet_initConfig();
 #define MQTT_WILL_QOS               MQTT_QOS_2
 #define MQTT_WILL_RETAIN            false
 
+//#define MQTT_CLIENT_PASSWORD        "HybridLighting123"
 #define MQTT_CLIENT_PASSWORD        NULL
+//#define MQTT_CLIENT_USERNAME        "Jordy"
 #define MQTT_CLIENT_USERNAME        NULL
 #define MQTT_CLIENT_KEEPALIVE       0
 #define MQTT_CLIENT_CLEAN_CONNECT   true
@@ -97,7 +99,9 @@ extern int32_t ti_net_SlNet_initConfig();
 #define MQTT_CONNECTION_PORT_NUMBER     1883
 #else
 #define MQTT_CONNECTION_FLAGS           MQTTCLIENT_NETCONN_IP4 | MQTTCLIENT_NETCONN_SEC
+//#define MQTT_CONNECTION_FLAGS           MQTTCLIENT_NETCONN_URL | MQTTCLIENT_NETCONN_SEC
 #define MQTT_CONNECTION_ADDRESS         "192.168.178.67"
+//#define MQTT_CONNECTION_ADDRESS         "adf249e7a9ef46d2924fa18aab4b7589.s2.eu.hivemq.cloud"
 #define MQTT_CONNECTION_PORT_NUMBER     8883
 #endif
 
@@ -114,6 +118,7 @@ int longPress = 0;
 /* If ClientId isn't set, the MAC address of the device will be copied into  */
 /* the ClientID parameter.                                                   */
 char ClientId[13] = {'\0'};
+//char ClientId[13] = {'J','o','r','d','y','\0'};
 
 enum{
     APP_MQTT_PUBLISH,
@@ -189,17 +194,18 @@ MQTTClient_ConnParams mqttConnParams =
 /* Day of month (DD format) range 1-31                                       */
 #define DAY                      1
 /* Month (MM format) in the range of 1-12                                    */
-#define MONTH                    5
+#define MONTH                    12
 /* Year (YYYY format)                                                        */
-#define YEAR                     2020
+#define YEAR                     2022
 /* Hours in the range of 0-23                                                */
-#define HOUR                     4
+#define HOUR                     12
 /* Minutes in the range of 0-59                                              */
 #define MINUTES                  00
 /* Seconds in the range of 0-59                                              */
 #define SEC                      00
 
-char *MQTTClient_secureFiles[1] = {"ca-cert.pem"};
+//char *MQTTClient_secureFiles[1] = {"ca-cert.pem"};
+char *MQTTClient_secureFiles[1] = {"auth-hivemq-cloud.pem"};
 
 MQTTClient_ConnParams mqttConnParams =
 {
