@@ -205,8 +205,8 @@ MQTTClient_ConnParams mqttConnParams =
 /* Seconds in the range of 0-59                                              */
 #define SEC                      00
 
-//char *MQTTClient_secureFiles[1] = {"ca-cert.pem"};
-char *MQTTClient_secureFiles[1] = {"auth-hivemq-cloud.pem"};
+char *MQTTClient_secureFiles[1] = {"ca-cert.pem"};
+//char *MQTTClient_secureFiles[1] = {"auth-hivemq-cloud.pem"};
 
 MQTTClient_ConnParams mqttConnParams =
 {
@@ -663,7 +663,7 @@ void mainThread(void * args){
 
     ret = Timer_start(timer1);
     if(ret < 0){
-        LOG_ERROR("failed to start the timer\r\n");
+        LOG_ERROR("failed to start the timer 1\r\n");
     }
 
 
