@@ -105,8 +105,12 @@ extern int32_t ti_net_SlNet_initConfig();
 #define MQTT_CONNECTION_PORT_NUMBER     8883
 #endif
 
-char accuPercentageString[32];
-int accuPercentage = 0;
+#define POWER_SOURCE_BATTERY    0
+#define POWER_SOURCE_MAIN       1
+
+char batteryPercentageString[32];
+int powerSource;
+int batteryPercentage;
 
 mqd_t appQueue;
 int connected;
@@ -309,9 +313,7 @@ void timerLEDCallback(Timer_Handle myHandle)
     GPIO_toggle(CONFIG_GPIO_LED_0);
 }
 
-void timerTestCallback(Timer_Handle myHandle){
-    GPIO_toggle(CONFIG_GPIO_LED_2);
-
+void timerSendDataCallback(Timer_Handle myHandle){
     int ret;
     struct msgQueue queueElement;
 
@@ -320,8 +322,6 @@ void timerTestCallback(Timer_Handle myHandle){
     if(ret < 0){
         LOG_ERROR("msg queue send error %d", ret);
     }
-
-    accuPercentage += 1;
 }
 
 void pushButtonPublishHandler(uint_least8_t index)
@@ -337,7 +337,7 @@ void pushButtonPublishHandler(uint_least8_t index)
         LOG_ERROR("msg queue send error %d", ret);
     }
 
-    accuPercentage += 5;
+    batteryPercentage += 5;
 
     GPIO_clearInt(CONFIG_GPIO_BUTTON_0);
     GPIO_enableInt(CONFIG_GPIO_BUTTON_0);
@@ -475,6 +475,36 @@ void ToggleLED3CB(char* topic, char* payload, uint8_t qos){
     LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
 }
 
+void TogglePowerCB(char* topic, char* payload, uint8_t qos){
+    if(powerSource == POWER_SOURCE_BATTERY){
+        powerSource = POWER_SOURCE_MAIN;
+    } else if(powerSource == POWER_SOURCE_MAIN){
+        powerSource = POWER_SOURCE_BATTERY;
+    }
+    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
+}
+
+void BatteryUpCB(char* topic, char* payload, uint8_t qos){
+    batteryPercentage += 10;
+    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
+}
+
+void BatteryDownCB(char* topic, char* payload, uint8_t qos){
+    batteryPercentage -= 10;
+    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
+}
+
+void Battery0CB(char* topic, char* payload, uint8_t qos){
+    batteryPercentage = 0;
+    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
+}
+
+void Battery100CB(char* topic, char* payload, uint8_t qos){
+    batteryPercentage = 100;
+    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
+}
+
+
 int32_t DisplayAppBanner(char* appName, char* appVersion){
 
     int32_t ret = 0;
@@ -579,6 +609,22 @@ int WifiInit(){
     return ret;
 }
 
+char* getPowerSource(){
+    if(batteryPercentage <= 20){
+        powerSource = POWER_SOURCE_MAIN;
+    }
+    if(powerSource == POWER_SOURCE_BATTERY){
+        GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_ON);
+        GPIO_write(CONFIG_GPIO_LED_1, CONFIG_GPIO_LED_OFF);
+        return "Battery Power";
+    } else if(powerSource == POWER_SOURCE_MAIN){
+        GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_OFF);
+        GPIO_write(CONFIG_GPIO_LED_1, CONFIG_GPIO_LED_ON);
+        return "Main Power";
+    }
+    return "";
+}
+
 void mainThread(void * args){
 
     int32_t ret;
@@ -653,7 +699,7 @@ void mainThread(void * args){
     params1.period = 2000000;
     params1.periodUnits = Timer_PERIOD_US;
     params1.timerMode = Timer_CONTINUOUS_CALLBACK;
-    params1.timerCallback = (Timer_CallBackFxn)timerTestCallback;
+    params1.timerCallback = (Timer_CallBackFxn)timerSendDataCallback;
 
     timer1 = Timer_open(CONFIG_TIMER_1, &params1);
     if (timer1 == NULL) {
@@ -669,7 +715,11 @@ void mainThread(void * args){
 
 MQTT_DEMO:
 
-    accuPercentage = 0;
+    batteryPercentage = 0;
+    powerSource = POWER_SOURCE_BATTERY;
+    GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_ON);
+    GPIO_write(CONFIG_GPIO_LED_1, CONFIG_GPIO_LED_OFF);
+
 
     ret = MQTT_IF_Init(mqttInitParams);
     if(ret < 0){
@@ -690,6 +740,12 @@ MQTT_DEMO:
     ret |= MQTT_IF_Subscribe(mqttClientHandle, "ems20/0974347/LED1", MQTT_QOS_2, ToggleLED1CB);
     ret |= MQTT_IF_Subscribe(mqttClientHandle, "ems20/0974347/LED2", MQTT_QOS_2, ToggleLED2CB);
     ret |= MQTT_IF_Subscribe(mqttClientHandle, "ems20/0974347/LED3", MQTT_QOS_2, ToggleLED3CB);
+    ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Toggle", MQTT_QOS_2, TogglePowerCB);
+    ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Battery/Up", MQTT_QOS_2, BatteryUpCB);
+    ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Battery/Down", MQTT_QOS_2, BatteryDownCB);
+    ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Battery/0", MQTT_QOS_2, Battery0CB);
+    ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Battery/100", MQTT_QOS_2, Battery100CB);
+
     if(ret < 0){
         while(1);
     }
@@ -715,18 +771,23 @@ MQTT_DEMO:
 
             LOG_INFO("APP_MQTT_PUBLISH\r\n");
 
-            snprintf(accuPercentageString, sizeof accuPercentageString, "%d\r\n", accuPercentage);
+            snprintf(batteryPercentageString, sizeof batteryPercentageString, "%d\r\n", batteryPercentage);
 
-            char* stringToSend = accuPercentageString;
+            char* stringToSend = batteryPercentageString;
 
             MQTT_IF_Publish(mqttClientHandle,
-                            "ems20/0974347/Accu",
+                            "HybridLighting/Power/Battery",
                             stringToSend,
                             strlen(stringToSend),
                             MQTT_QOS_2);
 
-//            GPIO_clearInt(CONFIG_GPIO_BUTTON_0);
-//            GPIO_enableInt(CONFIG_GPIO_BUTTON_0);
+            stringToSend = getPowerSource();
+
+            MQTT_IF_Publish(mqttClientHandle,
+                            "HybridLighting/Power",
+                            stringToSend,
+                            strlen(stringToSend),
+                            MQTT_QOS_2);
         }
         else if(queueElement.event == APP_MQTT_CON_TOGGLE){
 
