@@ -55,6 +55,7 @@
 #include <ti/drivers/SPI.h>
 #include <ti/drivers/GPIO.h>
 #include <ti/drivers/Timer.h>
+#include <ti/drivers/ADC.h>
 
 #include <ti/net/mqtt/mqttclient.h>
 
@@ -111,6 +112,11 @@ extern int32_t ti_net_SlNet_initConfig();
 char batteryPercentageString[32];
 int powerSource;
 int batteryPercentage;
+
+/* ADC conversion result variables */
+uint16_t adcValue0;
+uint32_t adcValue0MicroVolt;
+ADC_Handle adc;
 
 mqd_t appQueue;
 int connected;
@@ -314,6 +320,21 @@ void timerLEDCallback(Timer_Handle myHandle)
 }
 
 void timerSendDataCallback(Timer_Handle myHandle){
+    int_fast16_t res;
+    res = ADC_convert(adc, &adcValue0);
+
+    if (res == ADC_STATUS_SUCCESS) {
+
+        adcValue0MicroVolt = ADC_convertRawToMicroVolts(adc, adcValue0);
+
+        LOG_INFO("CONFIG_ADC_1 raw result: %d\n", adcValue0);
+        LOG_INFO("CONFIG_ADC_1 convert result: %d uV\n", adcValue0MicroVolt);
+    }
+    else {
+        LOG_ERROR("CONFIG_ADC_1 convert failed\n");
+    }
+
+    batteryPercentage = adcValue0MicroVolt;
     int ret;
     struct msgQueue queueElement;
 
@@ -631,6 +652,7 @@ void mainThread(void * args){
     mq_attr attr;
     Timer_Params params;
     Timer_Params params1;
+    ADC_Params adcParams;
     UART_Handle uartHandle;
     struct msgQueue queueElement;
     MQTTClient_Handle mqttClientHandle;
@@ -641,6 +663,7 @@ void mainThread(void * args){
     GPIO_init();
     SPI_init();
     Timer_init();
+    ADC_init();
 
     ret = ti_net_SlNet_initConfig();
     if(0 != ret)
@@ -710,6 +733,14 @@ void mainThread(void * args){
     ret = Timer_start(timer1);
     if(ret < 0){
         LOG_ERROR("failed to start the timer 1\r\n");
+    }
+
+    ADC_Params_init(&adcParams);
+    adc = ADC_open(CONFIG_ADC_1, &adcParams);
+
+    if (adc == NULL) {
+        LOG_ERROR("Error initializing CONFIG_ADC_1\n");
+        while (1);
     }
 
 
