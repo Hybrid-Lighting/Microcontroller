@@ -111,7 +111,8 @@ extern int32_t ti_net_SlNet_initConfig();
 
 char batteryPercentageString[32];
 int powerSource;
-int batteryPercentage;
+//int batteryPercentage;
+float batteryPercentage;
 
 /* ADC conversion result variables */
 uint16_t adcValue0;
@@ -334,7 +335,9 @@ void timerSendDataCallback(Timer_Handle myHandle){
         LOG_ERROR("CONFIG_ADC_1 convert failed\n");
     }
 
-    batteryPercentage = adcValue0MicroVolt;
+    batteryPercentage = adcValue0MicroVolt/14000.;
+    LOG_INFO("Battery Percentage: %f\n", batteryPercentage);
+
     int ret;
     struct msgQueue queueElement;
 
@@ -802,7 +805,7 @@ MQTT_DEMO:
 
             LOG_INFO("APP_MQTT_PUBLISH\r\n");
 
-            snprintf(batteryPercentageString, sizeof batteryPercentageString, "%d\r\n", batteryPercentage);
+            snprintf(batteryPercentageString, sizeof batteryPercentageString, "%.2f\r\n", batteryPercentage);
 
             char* stringToSend = batteryPercentageString;
 
