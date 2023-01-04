@@ -85,9 +85,7 @@ extern int32_t ti_net_SlNet_initConfig();
 #define MQTT_WILL_QOS               MQTT_QOS_2
 #define MQTT_WILL_RETAIN            false
 
-//#define MQTT_CLIENT_PASSWORD        "HybridLighting123"
 #define MQTT_CLIENT_PASSWORD        NULL
-//#define MQTT_CLIENT_USERNAME        "Jordy"
 #define MQTT_CLIENT_USERNAME        NULL
 #define MQTT_CLIENT_KEEPALIVE       0
 #define MQTT_CLIENT_CLEAN_CONNECT   true
@@ -100,9 +98,7 @@ extern int32_t ti_net_SlNet_initConfig();
 #define MQTT_CONNECTION_PORT_NUMBER     1883
 #else
 #define MQTT_CONNECTION_FLAGS           MQTTCLIENT_NETCONN_IP4 | MQTTCLIENT_NETCONN_SEC
-//#define MQTT_CONNECTION_FLAGS           MQTTCLIENT_NETCONN_URL | MQTTCLIENT_NETCONN_SEC
 #define MQTT_CONNECTION_ADDRESS         "192.168.178.67"
-//#define MQTT_CONNECTION_ADDRESS         "adf249e7a9ef46d2924fa18aab4b7589.s2.eu.hivemq.cloud"
 #define MQTT_CONNECTION_PORT_NUMBER     8883
 #endif
 
@@ -111,13 +107,15 @@ extern int32_t ti_net_SlNet_initConfig();
 
 char batteryPercentageString[32];
 int powerSource;
-//int batteryPercentage;
 float batteryPercentage;
 
 /* ADC conversion result variables */
 uint16_t adcValue0;
 uint32_t adcValue0MicroVolt;
-ADC_Handle adc;
+uint16_t adcValue1;
+uint32_t adcValue1MicroVolt;
+ADC_Handle adc0;
+ADC_Handle adc1;
 
 mqd_t appQueue;
 int connected;
@@ -130,7 +128,6 @@ int longPress = 0;
 /* If ClientId isn't set, the MAC address of the device will be copied into  */
 /* the ClientID parameter.                                                   */
 char ClientId[13] = {'\0'};
-//char ClientId[13] = {'J','o','r','d','y','\0'};
 
 enum{
     APP_MQTT_PUBLISH,
@@ -217,7 +214,6 @@ MQTTClient_ConnParams mqttConnParams =
 #define SEC                      00
 
 char *MQTTClient_secureFiles[1] = {"ca-cert.pem"};
-//char *MQTTClient_secureFiles[1] = {"auth-hivemq-cloud.pem"};
 
 MQTTClient_ConnParams mqttConnParams =
 {
@@ -322,14 +318,27 @@ void timerLEDCallback(Timer_Handle myHandle)
 
 void timerSendDataCallback(Timer_Handle myHandle){
     int_fast16_t res;
-    res = ADC_convert(adc, &adcValue0);
+    res = ADC_convert(adc0, &adcValue0);
 
     if (res == ADC_STATUS_SUCCESS) {
 
-        adcValue0MicroVolt = ADC_convertRawToMicroVolts(adc, adcValue0);
+        adcValue0MicroVolt = ADC_convertRawToMicroVolts(adc0, adcValue0);
 
-        LOG_INFO("CONFIG_ADC_1 raw result: %d\n", adcValue0);
-        LOG_INFO("CONFIG_ADC_1 convert result: %d uV\n", adcValue0MicroVolt);
+        LOG_INFO("CONFIG_ADC_0 raw result: %d\n", adcValue0);
+        LOG_INFO("CONFIG_ADC_0 convert result: %d uV\n", adcValue0MicroVolt);
+    }
+    else {
+        LOG_ERROR("CONFIG_ADC_0 convert failed\n");
+    }
+
+    res = ADC_convert(adc1, &adcValue1);
+
+    if (res == ADC_STATUS_SUCCESS) {
+
+        adcValue1MicroVolt = ADC_convertRawToMicroVolts(adc1, adcValue1);
+
+        LOG_INFO("CONFIG_ADC_1 raw result: %d\n", adcValue1);
+        LOG_INFO("CONFIG_ADC_1 convert result: %d uV\n", adcValue1MicroVolt);
     }
     else {
         LOG_ERROR("CONFIG_ADC_1 convert failed\n");
@@ -650,12 +659,12 @@ char* getPowerSource(){
 }
 
 void mainThread(void * args){
-
     int32_t ret;
     mq_attr attr;
     Timer_Params params;
     Timer_Params params1;
-    ADC_Params adcParams;
+    ADC_Params adcParams0;
+    ADC_Params adcParams1;
     UART_Handle uartHandle;
     struct msgQueue queueElement;
     MQTTClient_Handle mqttClientHandle;
@@ -722,7 +731,7 @@ void mainThread(void * args){
     }
 
     Timer_Params_init(&params1);
-    params1.period = 2000000;
+    params1.period = 5000000;
     params1.periodUnits = Timer_PERIOD_US;
     params1.timerMode = Timer_CONTINUOUS_CALLBACK;
     params1.timerCallback = (Timer_CallBackFxn)timerSendDataCallback;
@@ -738,22 +747,26 @@ void mainThread(void * args){
         LOG_ERROR("failed to start the timer 1\r\n");
     }
 
-    ADC_Params_init(&adcParams);
-    adc = ADC_open(CONFIG_ADC_1, &adcParams);
+    ADC_Params_init(&adcParams0);
+    adc0 = ADC_open(CONFIG_ADC_0, &adcParams0);
 
-    if (adc == NULL) {
-        LOG_ERROR("Error initializing CONFIG_ADC_1\n");
+    if (adc0 == NULL) {
+        LOG_ERROR("Error initializing CONFIG_ADC_0\n");
         while (1);
     }
 
+    ADC_Params_init(&adcParams1);
+    adc1 = ADC_open(CONFIG_ADC_1, &adcParams1);
+
+    if (adc1 == NULL) {
+        LOG_ERROR("Error initializing CONFIG_ADC_1\n");
+        while (1);
+    }
 
 MQTT_DEMO:
 
     batteryPercentage = 0;
     powerSource = POWER_SOURCE_BATTERY;
-    GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_ON);
-    GPIO_write(CONFIG_GPIO_LED_1, CONFIG_GPIO_LED_OFF);
-
 
     ret = MQTT_IF_Init(mqttInitParams);
     if(ret < 0){
