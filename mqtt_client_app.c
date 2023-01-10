@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Texas Instruments Incorporated
+ * Copyright (C) 2016-2021, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -47,32 +47,52 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <mqueue.h>
+#include <assert.h>
 #include <stdio.h>
-
-#include <ti/drivers/net/wifi/simplelink.h>
-#include <ti/drivers/net/wifi/slnetifwifi.h>
 
 #include <ti/drivers/SPI.h>
 #include <ti/drivers/GPIO.h>
 #include <ti/drivers/Timer.h>
 #include <ti/drivers/ADC.h>
-
+#include <ti/drivers/net/wifi/simplelink.h>
+#include <ti/drivers/net/wifi/slnetifwifi.h>
+#include <ti/drivers/net/wifi/slwificonn.h>
+#include <ti/net/slnet.h>
+#include <ti/net/slnetif.h>
+#include <ti/net/slnetconn.h>
 #include <ti/net/mqtt/mqttclient.h>
 
-#include "network_if.h"
-#include "uart_term.h"
-#include "mqtt_if.h"
-#include "debug_if.h"
+
+#include "ifmod/uart_if.h"
+#include "ifmod/wifi_if.h"
+#include "ifmod/mqtt_if.h"
+#include "ifmod/debug_if.h"
+#include "ifmod/ota_if.h"
+#include "ifmod/utils_if.h"
+#include "ifmod/ota_vendors.h"
 
 #include "ti_drivers_config.h"
 
+#undef DEBUG_IF_NAME
+#define DEBUG_IF_NAME       "MQTT_APP"
+#undef DEBUG_IF_SEVERITY
+#define DEBUG_IF_SEVERITY   E_INFO
+
 extern int32_t ti_net_SlNet_initConfig();
 
-#define APPLICATION_NAME         "MQTT client"
-#define APPLICATION_VERSION      "2.0.0"
+static void StartOTA(char* topic, char* payload, uint8_t qos);
+static void StartCloudOTA();
+static void StartLocalOTA();
+static void StartInternalUpdate();
 
-#define SL_TASKSTACKSIZE            2048
-#define SPAWN_TASK_PRIORITY         9
+pthread_t gSlNetConnThread;
+bool gNewImageLoaded = false;
+#define SLNETCONN_TIMEOUT               10 // 10 Second Timeout
+#define SLNETCONN_TASK_STACK_SIZE       (1200)
+
+
+#define APPLICATION_NAME         "MQTT client"
+#define APPLICATION_VERSION      "2.0.3"
 
 // un-comment this if you want to connect to an MQTT broker securely
 //#define MQTT_SECURE_CLIENT
@@ -117,6 +137,10 @@ uint32_t adcValue1MicroVolt;
 ADC_Handle adc0;
 ADC_Handle adc1;
 
+//#define OTA_DEFAULT_METHOD              StartCloudOTA
+//#define OTA_DEFAULT_METHOD              StartLocalOTA
+//#define OTA_DEFAULT_METHOD              StartInternalUpdate
+
 mqd_t appQueue;
 int connected;
 int deinit;
@@ -127,13 +151,14 @@ int longPress = 0;
 /* Client ID                                                                 */
 /* If ClientId isn't set, the MAC address of the device will be copied into  */
 /* the ClientID parameter.                                                   */
-char ClientId[13] = {'\0'};
+char ClientId[13] = "clientId123";
 
 enum{
     APP_MQTT_PUBLISH,
     APP_MQTT_CON_TOGGLE,
     APP_MQTT_DEINIT,
-    APP_BTN_HANDLER
+    APP_BTN_HANDLER,
+    APP_OTA_TRIGGER,
 };
 
 struct msgQueue
@@ -203,11 +228,11 @@ MQTTClient_ConnParams mqttConnParams =
 /* Day of month (DD format) range 1-31                                       */
 #define DAY                      1
 /* Month (MM format) in the range of 1-12                                    */
-#define MONTH                    12
+#define MONTH                    5
 /* Year (YYYY format)                                                        */
-#define YEAR                     2022
+#define YEAR                     2020
 /* Hours in the range of 0-23                                                */
-#define HOUR                     12
+#define HOUR                     4
 /* Minutes in the range of 0-59                                              */
 #define MINUTES                  00
 /* Seconds in the range of 0-59                                              */
@@ -226,7 +251,7 @@ MQTTClient_ConnParams mqttConnParams =
     MQTTClient_secureFiles                  // secure files
 };
 
-void setTime(){
+void setTime() {
 
     SlDateTime_t dateTime = {0};
     dateTime.tm_day = (uint32_t)DAY;
@@ -239,6 +264,48 @@ void setTime(){
                  sizeof(SlDateTime_t), (uint8_t *)(&dateTime));
 }
 #endif
+
+//*****************************************************************************
+//
+//! \brief The Function Handles the Fatal errors
+//!
+//! \param[in]  slFatalErrorEvent - Pointer to Fatal Error Event info
+//!
+//! \return None
+//!
+//*****************************************************************************
+
+void SimpleLinkSockEventHandler(SlSockEvent_t *pSock)
+{
+    if ( pSock->Event == SL_SOCKET_ASYNC_EVENT)
+    {
+        switch (pSock->SocketAsyncEvent.SockAsyncData.Type)
+        {
+        case SL_SSL_NOTIFICATION_WRONG_ROOT_CA:
+            /* on socket error Restart OTA */
+            LOG_INFO("SL_SOCKET_ASYNC_EVENT: ERROR - WRONG ROOT CA");
+            LOG_INFO("Please install the following Root Certificate:");
+            LOG_INFO(" %s\n\r", pSock->SocketAsyncEvent.SockAsyncData.pExtraInfo);
+            break;
+        default:
+            /* on socket error Restart OTA */
+            LOG_INFO("SL_SOCKET_ASYNC_EVENT socket event %d", pSock->Event);
+        }
+    }
+}
+
+void SimpleLinkHttpServerEventHandler(
+        SlNetAppHttpServerEvent_t *pHttpEvent,
+        SlNetAppHttpServerResponse_t *
+        pHttpResponse)
+{
+    /* Unused in this application */
+}
+
+void SimpleLinkNetAppRequestMemFreeEventHandler(_u8 *buffer)
+{
+    /* Unused in this application */
+}
 
 //*****************************************************************************
 //!
@@ -369,11 +436,11 @@ void pushButtonPublishHandler(uint_least8_t index)
     if(ret < 0){
         LOG_ERROR("msg queue send error %d", ret);
     }
-
-    batteryPercentage += 5;
-
-    GPIO_clearInt(CONFIG_GPIO_BUTTON_0);
-    GPIO_enableInt(CONFIG_GPIO_BUTTON_0);
+    queueElement.event = APP_OTA_TRIGGER;
+    ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
+    if(ret < 0){
+        LOG_ERROR("msg queue send error %d", ret);
+    }
 }
 
 void pushButtonConnectionHandler(uint_least8_t index)
@@ -577,69 +644,164 @@ int32_t DisplayAppBanner(char* appName, char* appVersion){
     return(ret);
 }
 
-int WifiInit(){
-
-    int32_t ret;
-    SlWlanSecParams_t securityParams;
-    pthread_t spawn_thread = (pthread_t) NULL;
-    pthread_attr_t pattrs_spawn;
-    struct sched_param pri_param;
-
-    pthread_attr_init(&pattrs_spawn);
-    pri_param.sched_priority = SPAWN_TASK_PRIORITY;
-    ret = pthread_attr_setschedparam(&pattrs_spawn, &pri_param);
-    ret |= pthread_attr_setstacksize(&pattrs_spawn, SL_TASKSTACKSIZE);
-    ret |= pthread_attr_setdetachstate(&pattrs_spawn, PTHREAD_CREATE_DETACHED);
-    ret = pthread_create(&spawn_thread, &pattrs_spawn, sl_Task, NULL);
-    if(ret != 0){
-        LOG_ERROR("could not create simplelink task\n\r");
-        while(1);
+//*****************************************************************************
+//
+//! \brief  SlWifiConn Event Handler
+//!
+//*****************************************************************************
+static void SlNetConnEventHandler(uint32_t ifID, SlNetConnStatus_e netStatus, void* data)
+{
+    switch(netStatus)
+    {
+    case SLNETCONN_STATUS_CONNECTED_MAC:
+        UART_PRINT("[SlNetConnEventHandler] I/F %d - CONNECTED (MAC LEVEL)!\n\r", ifID);
+    break;
+    case SLNETCONN_STATUS_CONNECTED_IP:
+        UART_PRINT("[SlNetConnEventHandler] I/F %d - CONNECTED (IP LEVEL)!\n\r", ifID);
+    break;
+    case SLNETCONN_STATUS_CONNECTED_INTERNET:
+        UART_PRINT("[SlNetConnEventHandler] I/F %d - CONNECTED (INTERNET LEVEL)!\n\r", ifID);
+    break;
+    case SLNETCONN_STATUS_WAITING_FOR_CONNECTION:
+    case SLNETCONN_STATUS_DISCONNECTED:
+        UART_PRINT("[SlNetConnEventHandler] I/F %d - DISCONNECTED!\n\r", ifID);
+    break;
+    default:
+        UART_PRINT("[SlNetConnEventHandler] I/F %d - UNKNOWN STATUS\n\r", ifID);
+    break;
     }
+}
 
-    Network_IF_ResetMCUStateMachine();
+#if OTA_SUPPORT
 
-    Network_IF_DeInitDriver();
+void OtaCallback(otaNotif_e notification, OtaEventParam_u *pParams)
+{
 
-    ret = Network_IF_InitDriver(ROLE_STA);
-    if(ret < 0){
-        LOG_ERROR("Failed to start SimpleLink Device\n\r");
-        while(1);
+    SlNetConnStatus_e status;
+    int retVal;
+
+    switch(notification)
+    {
+    case OTA_NOTIF_IMAGE_PENDING_COMMIT:
+         LOG_INFO("OTA_NOTIF_IMAGE_PENDING_COMMIT");
+         retVal = SlNetConn_getStatus(true, &status);
+         if (retVal == 0 && status == SLNETCONN_STATUS_CONNECTED_INTERNET)
+         {
+             OTA_IF_commit();
+         }
+         else
+         {
+             OTA_IF_rollback();
+             LOG_ERROR("Error Testing the new version - reverting to old version (%d)", retVal);
+         }
+         break;
+    case OTA_NOTIF_IMAGE_DOWNLOADED:
+    {
+        struct msgQueue queueElement;
+        gNewImageLoaded = true;
+        LOG_INFO("OTA_NOTIF_IMAGE_DOWNLOADED");
+        /* Closing the MQTT - will take the main thread out of its execution loop, then
+         * the gNewImageLoaded will mark that new Update is ready for installation
+         * (which involves MCU Reset)
+         */
+        queueElement.event = APP_MQTT_DEINIT;
+        retVal = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
+        assert (retVal == 0);
+        break;
     }
-
-    DisplayAppBanner(APPLICATION_NAME, APPLICATION_VERSION);
-
-    SetClientIdNamefromMacAddress();
-
-    GPIO_toggle(CONFIG_GPIO_LED_2);
-
-    securityParams.Key = (signed char*)SECURITY_KEY;
-    securityParams.KeyLen = strlen(SECURITY_KEY);
-    securityParams.Type = SECURITY_TYPE;
-
-    ret = Timer_start(timer0);
-    if(ret < 0){
-        LOG_ERROR("failed to start the timer\r\n");
+    case OTA_NOTIF_GETLINK_ERROR:
+        LOG_ERROR("OTA_NOTIF_GETLINK_ERROR (%d)", pParams->err.errorCode);
+        break;
+    case OTA_NOTIF_DOWNLOAD_ERROR:
+        LOG_ERROR("OTA_NOTIF_DOWNLOAD_ERROR (%d)", pParams->err.errorCode);
+        break;
+    case OTA_NOTIF_INSTALL_ERROR:
+        LOG_ERROR("OTA_NOTIF_INSTALL_ERROR (%d)", pParams->err.errorCode);
+        break;
+   case OTA_NOTIF_COMMIT_ERROR:
+         LOG_ERROR("OTA_NOTIF_COMMIT_ERROR {%d)", pParams->err.errorCode);
+         break;
+    default:
+        LOG_INFO("OTA_NOTIF not handled Id %d", notification);
+        break;
     }
+}
+#endif
 
-    ret = Network_IF_ConnectAP(SSID_NAME, securityParams);
-    if(ret < 0){
-        LOG_ERROR("Connection to an AP failed\n\r");
-    }
-    else{
+static void StartCloudOTA()
+{
+#if CLOUD_OTA_SUPPORT
+    LOG_INFO("Starting Cloud OTA");
+    OTA_IF_downloadImageByCloudVendor(OTA_GITHUB_getDownloadLink, OTA_DROPBOX_getDownloadLink, 0);
+#else
+    LOG_WARNING("Cloud OTA is not enabled. Please enable CLOUD_OTA_SUPPORT macro in ota_settings.h");
+#endif
+}
 
-        ret = sl_WlanProfileAdd((signed char*)SSID_NAME, strlen(SSID_NAME), 0, &securityParams, NULL, 7, 0);
-        if(ret < 0){
-            LOG_ERROR("failed to add profile %s\r\n", SSID_NAME);
+static void StartLocalOTA()
+{
+#if LOCAL_OTA_SUPPORT
+    LOG_INFO("Starting Local OTA");
+    OTA_IF_uploadImage(0); // use default HTTP port and no security
+#else
+    LOG_WARNING("Local OTA is not enabled. Enable LOCAL_OTA_SUPPORT macro. Please enable CLOUD_OTA_SUPPORT macro in ota_settings.h");
+#endif
+}
+
+static void StartInternalUpdate()
+{
+#if INTERNAL_UPDATE_SUPPORT
+    TarFileParams_t tarFileParams;
+
+    tarFileParams.pPath =  "/otaImages/cc3235sf.tar";
+    tarFileParams.token = 0;
+    tarFileParams.pVersion = NULL;
+    LOG_INFO("Starting Internal Update");
+    OTA_IF_readImage(&tarFileParams, 0); // use default HTTP port and no security
+#else
+    LOG_WARNING("Internal Update is not enabled. Please enable INTERNAL_UPDATE_SUPPORT macro in ota_settings.h");
+#endif
+}
+
+static void StartOTA(char* topic, char* payload, uint8_t qos)
+{
+    if(topic != NULL)
+    {
+        LOG_INFO("Trigger OTA...(MQTT:: %s)", payload);
+        if(strcmp(payload, "cloud") == 0)
+        {
+            StartCloudOTA();
         }
-        else{
-            LOG_INFO("profile added %s\r\n", SSID_NAME);
+        else if(strcmp(payload, "local") == 0)
+        {
+            StartLocalOTA();
+        }
+        else if(strcmp(payload, "internal") == 0)
+        {
+            StartInternalUpdate();
+        }
+        else
+        {
+            /* Unknown payload - mark as NULL to use the default method */
+            LOG_WARNING("Unknown payload - using the default OTA method");
+            topic = NULL;
         }
     }
+    else
+    {
+        LOG_INFO("Trigger OTA...(button press)");
+    }
+    /* The following is the default for button press or unknown MQTT payload */
+    if(topic == NULL)
+    {
+#ifdef OTA_DEFAULT_METHOD
+        OTA_DEFAULT_METHOD();
+#else
+        LOG_WARNING("No default OTA method is defined.");
+        LOG_WARNING("Set OTA_DEFAULT_METHOD to one of: StartCloudOTA / StartLocalOTA / StartInternalUpdate");
 
-    Timer_stop(timer0);
-    Timer_close(timer0);
-
-    return ret;
+#endif
+    }
 }
 
 char* getPowerSource(){
@@ -658,8 +820,10 @@ char* getPowerSource(){
     return "";
 }
 
-void mainThread(void * args){
+void mainThread(void * args)
+{
     int32_t ret;
+    int32_t conn_Failure = 0;
     mq_attr attr;
     Timer_Params params;
     Timer_Params params1;
@@ -677,48 +841,15 @@ void mainThread(void * args){
     Timer_init();
     ADC_init();
 
-    ret = ti_net_SlNet_initConfig();
-    if(0 != ret)
-    {
-        LOG_ERROR("Failed to initialize SlNetSock\n\r");
-    }
-    GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_OFF);
-    GPIO_write(CONFIG_GPIO_LED_1, CONFIG_GPIO_LED_OFF);
-    GPIO_write(CONFIG_GPIO_LED_2, CONFIG_GPIO_LED_OFF);
-
     GPIO_setCallback(CONFIG_GPIO_BUTTON_0, pushButtonPublishHandler);
     GPIO_setCallback(CONFIG_GPIO_BUTTON_1, pushButtonConnectionHandler);
 
-
-    // configuring the timer to toggle an LED until the AP is connected
-    Timer_Params_init(&params);
-    params.period = 1000000;
-    params.periodUnits = Timer_PERIOD_US;
-    params.timerMode = Timer_CONTINUOUS_CALLBACK;
-    params.timerCallback = (Timer_CallBackFxn)timerLEDCallback;
-
-    timer0 = Timer_open(CONFIG_TIMER_0, &params);
-    if (timer0 == NULL) {
-        LOG_ERROR("failed to initialize timer 0\r\n");
-        while(1);
-    }
-
-    attr.mq_maxmsg = 10;
-    attr.mq_msgsize = sizeof(struct msgQueue);
-    appQueue = mq_open("appQueue", O_CREAT, 0, &attr);
-    if(((int)appQueue) <= 0){
-        while(1);
-    }
-
-    ret = WifiInit();
-    if(ret < 0){
-        while(1);
-    }
-
     GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_OFF);
     GPIO_write(CONFIG_GPIO_LED_1, CONFIG_GPIO_LED_OFF);
     GPIO_write(CONFIG_GPIO_LED_2, CONFIG_GPIO_LED_OFF);
 
+    // configuring the timer to toggle an LED until the AP is connected
+    Timer_Params_init(&params);
     params.period = 1500000;
     params.periodUnits = Timer_PERIOD_US;
     params.timerMode = Timer_ONESHOT_CALLBACK;
@@ -763,6 +894,73 @@ void mainThread(void * args){
         while (1);
     }
 
+    attr.mq_maxmsg = 10;
+    attr.mq_msgsize = sizeof(struct msgQueue);
+    appQueue = mq_open("appQueue", O_CREAT, 0, &attr);
+    if(((int)appQueue) <= 0){
+        while(1);
+    }
+
+    /* Enable SlNet framework */
+    ret = ti_net_SlNet_initConfig();
+    if(0 != ret)
+    {
+        LOG_ERROR("Failed to initialize SlNetSock\n\r");
+    }
+
+    /* Enable SlWifiConn */
+    ret = WIFI_IF_init();
+    assert (ret == 0);
+
+    /* To get the NWP content (version + MAC),
+     * The DisplayAppBanner should be called after WIFI_IF_init() after sl_Start() */
+    DisplayAppBanner(APPLICATION_NAME, APPLICATION_VERSION);
+
+
+    /* Enable SlNetConn */
+    ret = SlNetConn_init(0);
+    assert (ret == 0);
+
+    gSlNetConnThread = OS_createTask(1, SLNETCONN_TASK_STACK_SIZE, SlNetConn_process, NULL, OS_TASK_FLAG_DETACHED);
+    assert(gSlNetConnThread);
+
+    
+    ret = SlNetConn_start(SLNETCONN_SERVICE_LVL_INTERNET, SlNetConnEventHandler, SLNETCONN_TIMEOUT, 0);
+
+    /* If Failure to acquire AP Connection, verify no pending OTA commit by initializing OTA library then return to attempting to connect to the AP */
+    if(ret != 0)
+    {
+        LOG_INFO("failed to Connect to AP: Error Code: %d. Verifying no pending OTA commits then re-attempting", ret);
+        conn_Failure = 1;
+
+    }
+
+#if OTA_SUPPORT
+    HTTPSRV_IF_params_t *pHttpSrvParams = NULL;
+#if LOCAL_OTA_SUPPORT
+    HTTPSRV_IF_params_t httpsSrvParams;
+    httpsSrvParams.pClientRootCa = NULL;
+    httpsSrvParams.pServerCert = "dummy-root-ca-cert";
+    httpsSrvParams.pServerKey = "dummy-root-ca-cert-key";
+    httpsSrvParams.primaryPort = 443;
+    httpsSrvParams.secondaryPort = 80;
+    pHttpSrvParams = &httpsSrvParams;
+#endif
+    ret = OTA_IF_init(pHttpSrvParams, OtaCallback, 0, NULL);
+    if(ret < 0){
+        LOG_INFO("failed to init OTA_IF");
+        while(1);
+    }
+#endif
+
+    /* Loop attempt to establish AP Connection */
+    while(conn_Failure != 0)
+    {
+        conn_Failure = SlNetConn_start(SLNETCONN_SERVICE_LVL_INTERNET, SlNetConnEventHandler, SLNETCONN_TIMEOUT, 0);
+        LOG_INFO("failed to Connect to AP: Error Code: %d. Retrying...",conn_Failure);
+    }
+
+/* AP Connection Success, continue MQTT Application */
 MQTT_DEMO:
 
     batteryPercentage = 0;
@@ -792,7 +990,7 @@ MQTT_DEMO:
     ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Battery/Down", MQTT_QOS_2, BatteryDownCB);
     ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Battery/0", MQTT_QOS_2, Battery0CB);
     ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Battery/100", MQTT_QOS_2, Battery100CB);
-
+    ret |= MQTT_IF_Subscribe(mqttClientHandle, "cc32xx/OTA", MQTT_QOS_2, StartOTA);
     if(ret < 0){
         while(1);
     }
@@ -800,94 +998,119 @@ MQTT_DEMO:
         LOG_INFO("Subscribed to all topics successfully\r\n");
     }
 
+    do {
+        ret = SlNetConn_waitForConnection(SLNETCONN_SERVICE_LVL_INTERNET, SLNETCONN_TIMEOUT);
+    } while(ret != 0);
+    LOG_INFO("Wi-Fi connection is UP");
+
     mqttClientHandle = MQTT_IF_Connect(mqttClientParams, mqttConnParams, MQTT_EventCallback);
-    if(mqttClientHandle < 0){
-        while(1);
+    if((int)mqttClientHandle < 0){
+        LOG_ERROR("MQTT_IF_Connect Error (%d)\r\n", mqttClientHandle);
     }
+    else
+    {
 
-    // wait for CONNACK
-    while(connected == 0);
+        // wait for CONNACK
+        while(connected == 0);
+        LOG_INFO("MQTT connection is UP");
 
-    GPIO_enableInt(CONFIG_GPIO_BUTTON_0);
+        GPIO_enableInt(CONFIG_GPIO_BUTTON_0);
 
-    while(1){
+        while(1){
 
-        mq_receive(appQueue, (char*)&queueElement, sizeof(struct msgQueue), NULL);
+            mq_receive(appQueue, (char*)&queueElement, sizeof(struct msgQueue), NULL);
 
-        if(queueElement.event == APP_MQTT_PUBLISH){
+            if(queueElement.event == APP_MQTT_PUBLISH){
 
-            LOG_INFO("APP_MQTT_PUBLISH\r\n");
+                LOG_INFO("APP_MQTT_PUBLISH\r\n");
 
-            snprintf(batteryPercentageString, sizeof batteryPercentageString, "%.2f\r\n", batteryPercentage);
+                snprintf(batteryPercentageString, sizeof batteryPercentageString, "%.2f\r\n", batteryPercentage);
 
-            char* stringToSend = batteryPercentageString;
+                char* stringToSend = batteryPercentageString;
 
-            MQTT_IF_Publish(mqttClientHandle,
-                            "HybridLighting/Power/Battery",
-                            stringToSend,
-                            strlen(stringToSend),
-                            MQTT_QOS_2);
+                MQTT_IF_Publish(mqttClientHandle,
+                                "HybridLighting/Power/Battery",
+                                stringToSend,
+                                strlen(stringToSend),
+                                MQTT_QOS_2);
 
-            stringToSend = getPowerSource();
+                stringToSend = getPowerSource();
 
-            MQTT_IF_Publish(mqttClientHandle,
-                            "HybridLighting/Power",
-                            stringToSend,
-                            strlen(stringToSend),
-                            MQTT_QOS_2);
-        }
-        else if(queueElement.event == APP_MQTT_CON_TOGGLE){
+                MQTT_IF_Publish(mqttClientHandle,
+                                "HybridLighting/Power",
+                                stringToSend,
+                                strlen(stringToSend),
+                                MQTT_QOS_2);
+            }
+            else if(queueElement.event == APP_MQTT_CON_TOGGLE){
 
-            LOG_TRACE("APP_MQTT_CON_TOGGLE %d\r\n", connected);
+                LOG_TRACE("APP_MQTT_CON_TOGGLE %d\r\n", connected);
 
 
-            if(connected){
-                ret = MQTT_IF_Disconnect(mqttClientHandle);
-                if(ret >= 0){
-                    connected = 0;
+                if(connected){
+                    ret = MQTT_IF_Disconnect(mqttClientHandle);
+                    if(ret >= 0){
+                        connected = 0;
+                    }
+                }
+                else{
+                    mqttClientHandle = MQTT_IF_Connect(mqttClientParams, mqttConnParams, MQTT_EventCallback);
+                    if((int)mqttClientHandle >= 0)
+                    {
+                        connected = 1;
+                    }
+                    /* If failed to re-connect to mqtt start over (this will also include waiting for
+                     * the wi-fi connection (in case failure of AP connection caused the disconnection )
+                     *  */
+                    if(connected == 0)
+                        break;
                 }
             }
-            else{
-                mqttClientHandle = MQTT_IF_Connect(mqttClientParams, mqttConnParams, MQTT_EventCallback);
-                if((int)mqttClientHandle >= 0){
-                    connected = 1;
+            else if(queueElement.event == APP_MQTT_DEINIT){
+                break;
+            }
+            else if(queueElement.event == APP_OTA_TRIGGER){
+                StartOTA(NULL, NULL, 0);
+            }
+            else if(queueElement.event == APP_BTN_HANDLER){
+
+                struct msgQueue queueElement;
+
+                ret = detectLongPress();
+                if(ret == 0){
+
+                    LOG_TRACE("APP_BTN_HANDLER SHORT PRESS\r\n");
+                    queueElement.event = APP_MQTT_CON_TOGGLE;
+                }
+                else{
+
+                    LOG_TRACE("APP_BTN_HANDLER LONG PRESS\r\n");
+                    queueElement.event = APP_MQTT_DEINIT;
+                }
+
+                ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
+                if(ret < 0){
+                    LOG_ERROR("msg queue send error %d", ret);
                 }
             }
         }
-        else if(queueElement.event == APP_MQTT_DEINIT){
-            break;
-        }
-        else if(queueElement.event == APP_BTN_HANDLER){
-
-            struct msgQueue queueElement;
-
-            ret = detectLongPress();
-            if(ret == 0){
-
-                LOG_TRACE("APP_BTN_HANDLER SHORT PRESS\r\n");
-                queueElement.event = APP_MQTT_CON_TOGGLE;
-            }
-            else{
-
-                LOG_TRACE("APP_BTN_HANDLER LONG PRESS\r\n");
-                queueElement.event = APP_MQTT_DEINIT;
-            }
-
-            ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
-            if(ret < 0){
-                LOG_ERROR("msg queue send error %d", ret);
-            }
-        }
     }
-
     deinit = 1;
     if(connected){
         MQTT_IF_Disconnect(mqttClientHandle);
     }
     MQTT_IF_Deinit();
 
+#if OTA_SUPPORT
+    if(gNewImageLoaded)
+    {
+        SlNetConn_stop(SlNetConnEventHandler);
+        OTA_IF_install();
+    }
+#endif
+
     LOG_INFO("looping the MQTT functionality of the example for demonstration purposes only\r\n");
-    sleep(2);
+    sleep(1);
     goto MQTT_DEMO;
 }
 

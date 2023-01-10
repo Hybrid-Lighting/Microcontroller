@@ -53,3 +53,4 @@ dkms.conf
 /Debug/
 /MCU+Image/
 /.launches/
+/.settings/
