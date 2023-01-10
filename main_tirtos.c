@@ -42,12 +42,12 @@
 /* RTOS header files */
 #include <ti/sysbios/BIOS.h>
 
+/* TI-DRIVERS Header files */
+#include "ti_drivers_config.h"
+
 /* TI-RTOS Header files */
 #include <ti/drivers/GPIO.h>
 
-/* TI-DRIVERS Header files */
-
-#include "ti_drivers_config.h"
 
 extern void * mainThread(void *arg0);
 

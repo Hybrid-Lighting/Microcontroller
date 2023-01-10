@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Texas Instruments Incorporated
+ * Copyright (C) 2016-2021, Texas Instruments Incorporated
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,7 +39,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "uart_term.h"
+#include "uart_if.h"
 
 extern int vsnprintf(char * s,
                      size_t n,

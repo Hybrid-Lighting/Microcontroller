@@ -3,7 +3,7 @@
 	<name>Mainsystem_CC3220S_MQTT_tirtos_ccs</name>
 	<comment></comment>
 	<projects>
-		<project>tirtos_builds_cc32xx_release_ccs</project>
+		<project>tirtos_builds_cc32xx_release_ccs_6_10_00_05</project>
 	</projects>
 	<buildSpec>
 		<buildCommand>

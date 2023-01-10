@@ -1,18 +1,47 @@
 /*
- * mqttclient_if.c
+ * Copyright (C) 2016-2021, Texas Instruments Incorporated
+ * All rights reserved.
  *
- *  Created on: Jan 22, 2020
- *      Author: a0227533
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * *  Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * *  Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * *  Neither the name of Texas Instruments Incorporated nor the names of
+ *    its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+ * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <mqtt_if.h>
-
+#include <ifmod/debug_if.h>
+#include <ifmod/mqtt_if.h>
+#include <ifmod/utils_if.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 #include <mqueue.h>
 
-#include "debug_if.h"
+#undef DEBUG_IF_NAME
+#define DEBUG_IF_NAME       "MQTT_IF"
+#undef DEBUG_IF_SEVERITY
+#define DEBUG_IF_SEVERITY   E_INFO
 
 
 enum{
@@ -50,7 +79,9 @@ static struct mqttContext
     struct Node* head;
     int moduleState;
     uint8_t clientDisconnectFlag;
-} mMQTTContext = {NULL, NULL, NULL, NULL, NULL, MQTT_STATE_IDLE, 0};
+    pthread_t appThread;
+    pthread_t contextThread;
+} mMQTTContext = { 0 };
 
 // Callback invoked by the internal MQTT library to notify the application of MQTT events
 void MQTTClientCallback(int32_t event, void *metaData, uint32_t metaDateLen, void *data, uint32_t dataLen)
@@ -342,9 +373,6 @@ int MQTT_IF_Init(MQTT_IF_InitParams_t initParams)
 {
     int ret;
     mq_attr attr;
-    pthread_attr_t threadAttr;
-    struct sched_param schedulingparams;
-    pthread_t mqttAppThread = (pthread_t) NULL;
 
     if(mMQTTContext.moduleState != MQTT_STATE_IDLE){
         LOG_ERROR("library only supports 1 active init call\r\n");
@@ -374,15 +402,8 @@ int MQTT_IF_Init(MQTT_IF_InitParams_t initParams)
         return (int)mMQTTContext.msgQueue;
     }
 
-    pthread_attr_init(&threadAttr);
-    schedulingparams.sched_priority = initParams.threadPriority;
-    ret = pthread_attr_setschedparam(&threadAttr, &schedulingparams);
-    ret |= pthread_attr_setstacksize(&threadAttr, initParams.stackSize);
-    ret |= pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
-    ret |= pthread_create(&mqttAppThread, &threadAttr, MQTTAppThread, NULL);
-    if(ret == 0){
-        mMQTTContext.moduleState = MQTT_STATE_INITIALIZED;
-    }
+    mMQTTContext.appThread = OS_createTask(initParams.threadPriority, initParams.stackSize, MQTTAppThread, NULL, OS_TASK_FLAG_DETACHED);
+    mMQTTContext.moduleState = MQTT_STATE_INITIALIZED;
     pthread_mutex_unlock(mMQTTContext.moduleMutex);
 
     return ret;
@@ -437,9 +458,6 @@ int MQTT_IF_Deinit(MQTTClient_Handle mqttClientHandle)
 MQTTClient_Handle MQTT_IF_Connect(MQTT_IF_ClientParams_t mqttClientParams, MQTTClient_ConnParams mqttConnParams, MQTT_IF_EventCallback_f mqttCB)
 {
     int ret;
-    pthread_attr_t threadAttr;
-    struct sched_param priParam;
-    pthread_t mqttContextThread = (pthread_t) NULL;
     MQTTClient_Params clientParams;
 
     pthread_mutex_lock(mMQTTContext.moduleMutex);
@@ -471,16 +489,7 @@ MQTTClient_Handle MQTT_IF_Connect(MQTT_IF_ClientParams_t mqttClientParams, MQTTC
         return (MQTTClient_Handle)-1;
     }
 
-    pthread_attr_init(&threadAttr);
-    priParam.sched_priority = 2;
-    ret = pthread_attr_setschedparam(&threadAttr, &priParam);
-    ret |= pthread_attr_setstacksize(&threadAttr, MQTTAPPTHREADSIZE);
-    ret |= pthread_attr_setdetachstate(&threadAttr, PTHREAD_CREATE_DETACHED);
-    ret |= pthread_create(&mqttContextThread, &threadAttr, MQTTContextThread, NULL);
-    if(ret != 0){
-        pthread_mutex_unlock(mMQTTContext.moduleMutex);
-        return (MQTTClient_Handle)-1;
-    }
+    mMQTTContext.contextThread = OS_createTask(2, MQTTAPPTHREADSIZE, MQTTContextThread, NULL, OS_TASK_FLAG_DETACHED);
 
     // if the user included additional parameters for the client MQTTClient_set will be called
     if(mqttClientParams.willParams != NULL){
