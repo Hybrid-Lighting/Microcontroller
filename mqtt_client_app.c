@@ -413,14 +413,15 @@ void timerSendDataCallback(Timer_Handle myHandle){
 
     batteryPercentage = adcValue0MicroVolt/14000.;
     LOG_INFO("Battery Percentage: %f\n", batteryPercentage);
+    if(connected){
+        int ret;
+        struct msgQueue queueElement;
 
-    int ret;
-    struct msgQueue queueElement;
-
-    queueElement.event = APP_MQTT_PUBLISH;
-    ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
-    if(ret < 0){
-        LOG_ERROR("msg queue send error %d", ret);
+        queueElement.event = APP_MQTT_PUBLISH;
+        ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
+        if(ret < 0){
+            LOG_ERROR("msg queue send error %d", ret);
+        }
     }
 }
 
