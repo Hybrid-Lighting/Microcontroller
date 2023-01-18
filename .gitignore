@@ -54,3 +54,4 @@ dkms.conf
 /MCU+Image/
 /.launches/
 /.settings/
+.xdchelp
