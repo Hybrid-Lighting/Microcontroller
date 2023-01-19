@@ -130,14 +130,13 @@ int powerSource;
 float batteryPercentage;
 
 /* ADC conversion result variables */
-uint16_t adcValue0;
-uint32_t adcValue0MicroVolt;
-float adcValue0Volt;
-uint16_t adcValue1;
-uint32_t adcValue1MicroVolt;
-float adcValue1Volt;
 ADC_Handle adc0;
+uint16_t adcValue0;
+float adcValue0Volt;
+
 ADC_Handle adc1;
+uint16_t adcValue1;
+float adcValue1Volt;
 
 //#define OTA_DEFAULT_METHOD              StartCloudOTA
 //#define OTA_DEFAULT_METHOD              StartLocalOTA
@@ -415,8 +414,6 @@ void timerSendDataCallback(Timer_Handle myHandle){
     res = ADC_convert(adc0, &adcValue0);
 
     if (res == ADC_STATUS_SUCCESS) {
-
-//        adcValue0MicroVolt = ADC_convertRawToMicroVolts(adc0, adcValue0);
         adcValue0Volt = adcValue0/3740.*3.186;
 
         LOG_INFO("CONFIG_ADC_0 raw result: %d\n", adcValue0);
@@ -429,8 +426,6 @@ void timerSendDataCallback(Timer_Handle myHandle){
     res = ADC_convert(adc1, &adcValue1);
 
     if (res == ADC_STATUS_SUCCESS) {
-
-//        adcValue1MicroVolt = ADC_convertRawToMicroVolts(adc1, adcValue1);
         adcValue1Volt = adcValue1/3740.*3.186;
 
         LOG_INFO("CONFIG_ADC_1 raw result: %d\n", adcValue1);
@@ -445,12 +440,8 @@ void timerSendDataCallback(Timer_Handle myHandle){
     } else{
         batteryPercentage = (adcValue0-2880.)/(3740.-2880.)*100;
     }
-//    batteryPercentage = adcValue0/3740.*100;
-//    batteryPercentage = adcValue0MicroVolt/14000.;
+
     LOG_INFO("Battery Percentage: %f\n", batteryPercentage);
-
-//    getPowerSource();
-
     LOG_INFO("Powersource: %s\n", getPowerSource());
 
     if(connected){
@@ -478,26 +469,6 @@ void pushButtonChangePowerSourceHandler(uint_least8_t index){
     GPIO_clearInt(CONFIG_GPIO_BUTTON_0);
     GPIO_enableInt(CONFIG_GPIO_BUTTON_0);
 }
-
-
-//void pushButtonPublishHandler(uint_least8_t index)
-//{
-//    int ret;
-//    struct msgQueue queueElement;
-//
-//    GPIO_disableInt(CONFIG_GPIO_BUTTON_0);
-//
-//    queueElement.event = APP_MQTT_PUBLISH;
-//    ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
-//    if(ret < 0){
-//        LOG_ERROR("msg queue send error %d", ret);
-//    }
-//    queueElement.event = APP_OTA_TRIGGER;
-//    ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
-//    if(ret < 0){
-//        LOG_ERROR("msg queue send error %d", ret);
-//    }
-//}
 
 void pushButtonConnectionHandler(uint_least8_t index)
 {
@@ -616,21 +587,6 @@ void BrokerCB(char* topic, char* payload, uint8_t qos){
     LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
 }
 
-void ToggleLED1CB(char* topic, char* payload, uint8_t qos){
-    GPIO_toggle(CONFIG_GPIO_LED_0);
-    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
-}
-
-void ToggleLED2CB(char* topic, char* payload, uint8_t qos){
-    GPIO_toggle(CONFIG_GPIO_LED_1);
-    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
-}
-
-void ToggleLED3CB(char* topic, char* payload, uint8_t qos){
-    GPIO_toggle(CONFIG_GPIO_LED_2);
-    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
-}
-
 void TogglePowerCB(char* topic, char* payload, uint8_t qos){
     if(powerSource == POWER_SOURCE_BATTERY){
         powerSource = POWER_SOURCE_MAIN;
@@ -639,27 +595,6 @@ void TogglePowerCB(char* topic, char* payload, uint8_t qos){
     }
     LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
 }
-
-void BatteryUpCB(char* topic, char* payload, uint8_t qos){
-    batteryPercentage += 10;
-    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
-}
-
-void BatteryDownCB(char* topic, char* payload, uint8_t qos){
-    batteryPercentage -= 10;
-    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
-}
-
-void Battery0CB(char* topic, char* payload, uint8_t qos){
-    batteryPercentage = 0;
-    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
-}
-
-void Battery100CB(char* topic, char* payload, uint8_t qos){
-    batteryPercentage = 100;
-    LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
-}
-
 
 int32_t DisplayAppBanner(char* appName, char* appVersion){
 
@@ -882,7 +817,6 @@ void mainThread(void * args)
     ADC_init();
 
     GPIO_setCallback(CONFIG_GPIO_BUTTON_0, pushButtonChangePowerSourceHandler);
-//    GPIO_setCallback(CONFIG_GPIO_BUTTON_0, pushButtonPublishHandler);
     GPIO_setCallback(CONFIG_GPIO_BUTTON_1, pushButtonConnectionHandler);
 
     GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_OFF);
@@ -1023,14 +957,7 @@ MQTT_DEMO:
      * of the topic callbacks. The user may still call subscribe after connect but have to be aware of this.
      */
     ret = MQTT_IF_Subscribe(mqttClientHandle, "Broker/To/cc32xx", MQTT_QOS_2, BrokerCB);
-    ret |= MQTT_IF_Subscribe(mqttClientHandle, "ems20/0974347/LED1", MQTT_QOS_2, ToggleLED1CB);
-    ret |= MQTT_IF_Subscribe(mqttClientHandle, "ems20/0974347/LED2", MQTT_QOS_2, ToggleLED2CB);
-    ret |= MQTT_IF_Subscribe(mqttClientHandle, "ems20/0974347/LED3", MQTT_QOS_2, ToggleLED3CB);
     ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Toggle", MQTT_QOS_2, TogglePowerCB);
-    ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Battery/Up", MQTT_QOS_2, BatteryUpCB);
-    ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Battery/Down", MQTT_QOS_2, BatteryDownCB);
-    ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Battery/0", MQTT_QOS_2, Battery0CB);
-    ret |= MQTT_IF_Subscribe(mqttClientHandle, "HybridLighting/Power/Battery/100", MQTT_QOS_2, Battery100CB);
     ret |= MQTT_IF_Subscribe(mqttClientHandle, "cc32xx/OTA", MQTT_QOS_2, StartOTA);
     if(ret < 0){
         while(1);
