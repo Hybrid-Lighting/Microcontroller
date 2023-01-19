@@ -132,8 +132,10 @@ float batteryPercentage;
 /* ADC conversion result variables */
 uint16_t adcValue0;
 uint32_t adcValue0MicroVolt;
+float adcValue0Volt;
 uint16_t adcValue1;
 uint32_t adcValue1MicroVolt;
+float adcValue1Volt;
 ADC_Handle adc0;
 ADC_Handle adc1;
 
@@ -372,6 +374,31 @@ int32_t SetClientIdNamefromMacAddress()
     return(ret);
 }
 
+char* getPowerSource(){
+    if(batteryPercentage <= 20){
+        powerSource = POWER_SOURCE_MAIN;
+        LOG_INFO("Battery below 20%%\n");
+    }
+    if(powerSource == POWER_SOURCE_BATTERY){
+        GPIO_write(CONFIG_GPIO_0, CONFIG_GPIO_LED_OFF);
+        GPIO_write(CONFIG_GPIO_1, CONFIG_GPIO_LED_OFF);
+
+        GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_ON);
+        GPIO_write(CONFIG_GPIO_LED_1, CONFIG_GPIO_LED_OFF);
+
+        return "Battery Power";
+    } else if(powerSource == POWER_SOURCE_MAIN){
+        GPIO_write(CONFIG_GPIO_0, CONFIG_GPIO_LED_ON);
+        GPIO_write(CONFIG_GPIO_1, CONFIG_GPIO_LED_ON);
+
+        GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_OFF);
+        GPIO_write(CONFIG_GPIO_LED_1, CONFIG_GPIO_LED_ON);
+
+        return "Main Power";
+    }
+    return "";
+}
+
 void timerCallback(Timer_Handle myHandle)
 {
     longPress = 1;
@@ -389,10 +416,11 @@ void timerSendDataCallback(Timer_Handle myHandle){
 
     if (res == ADC_STATUS_SUCCESS) {
 
-        adcValue0MicroVolt = ADC_convertRawToMicroVolts(adc0, adcValue0);
+//        adcValue0MicroVolt = ADC_convertRawToMicroVolts(adc0, adcValue0);
+        adcValue0Volt = adcValue0/3740.*3.186;
 
         LOG_INFO("CONFIG_ADC_0 raw result: %d\n", adcValue0);
-        LOG_INFO("CONFIG_ADC_0 convert result: %d uV\n", adcValue0MicroVolt);
+        LOG_INFO("CONFIG_ADC_0 convert result: %.3f V\n", adcValue0Volt);
     }
     else {
         LOG_ERROR("CONFIG_ADC_0 convert failed\n");
@@ -402,17 +430,29 @@ void timerSendDataCallback(Timer_Handle myHandle){
 
     if (res == ADC_STATUS_SUCCESS) {
 
-        adcValue1MicroVolt = ADC_convertRawToMicroVolts(adc1, adcValue1);
+//        adcValue1MicroVolt = ADC_convertRawToMicroVolts(adc1, adcValue1);
+        adcValue1Volt = adcValue1/3740.*3.186;
 
         LOG_INFO("CONFIG_ADC_1 raw result: %d\n", adcValue1);
-        LOG_INFO("CONFIG_ADC_1 convert result: %d uV\n", adcValue1MicroVolt);
+        LOG_INFO("CONFIG_ADC_1 convert result: %.3f V\n", adcValue1Volt);
     }
     else {
         LOG_ERROR("CONFIG_ADC_1 convert failed\n");
     }
 
-    batteryPercentage = adcValue0MicroVolt/14000.;
+    if(adcValue0 < 2880){
+        batteryPercentage = 0;
+    } else{
+        batteryPercentage = (adcValue0-2880.)/(3740.-2880.)*100;
+    }
+//    batteryPercentage = adcValue0/3740.*100;
+//    batteryPercentage = adcValue0MicroVolt/14000.;
     LOG_INFO("Battery Percentage: %f\n", batteryPercentage);
+
+//    getPowerSource();
+
+    LOG_INFO("Powersource: %s\n", getPowerSource());
+
     if(connected){
         int ret;
         struct msgQueue queueElement;
@@ -820,22 +860,6 @@ static void StartOTA(char* topic, char* payload, uint8_t qos)
     }
 }
 
-char* getPowerSource(){
-    if(batteryPercentage <= 20){
-        powerSource = POWER_SOURCE_MAIN;
-    }
-    if(powerSource == POWER_SOURCE_BATTERY){
-        GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_ON);
-        GPIO_write(CONFIG_GPIO_LED_1, CONFIG_GPIO_LED_OFF);
-        return "Battery Power";
-    } else if(powerSource == POWER_SOURCE_MAIN){
-        GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_OFF);
-        GPIO_write(CONFIG_GPIO_LED_1, CONFIG_GPIO_LED_ON);
-        return "Main Power";
-    }
-    return "";
-}
-
 void mainThread(void * args)
 {
     int32_t ret;
@@ -879,7 +903,7 @@ void mainThread(void * args)
     }
 
     Timer_Params_init(&params1);
-    params1.period = 5000000;
+    params1.period = 2000000;
     params1.periodUnits = Timer_PERIOD_US;
     params1.timerMode = Timer_CONTINUOUS_CALLBACK;
     params1.timerCallback = (Timer_CallBackFxn)timerSendDataCallback;
@@ -980,8 +1004,8 @@ void mainThread(void * args)
 /* AP Connection Success, continue MQTT Application */
 MQTT_DEMO:
 
-    batteryPercentage = 0;
-    powerSource = POWER_SOURCE_BATTERY;
+    batteryPercentage = 100;
+    powerSource = POWER_SOURCE_MAIN;
 
     ret = MQTT_IF_Init(mqttInitParams);
     if(ret < 0){
