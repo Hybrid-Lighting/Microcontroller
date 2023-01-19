@@ -125,6 +125,9 @@ bool gNewImageLoaded = false;
 #define POWER_SOURCE_BATTERY    0
 #define POWER_SOURCE_MAIN       1
 
+#define LOW_BATTERY_PERCENTAGE  20
+#define SEND_DATA_PERIOD        2000000
+
 char batteryPercentageString[32];
 int powerSource;
 float batteryPercentage;
@@ -373,12 +376,18 @@ int32_t SetClientIdNamefromMacAddress()
     return(ret);
 }
 
+// Function to get the current powersource
+// When the battery is low, it will always switch to Main power
+// Per power source the right pins for the LEDs and external connection will be set to high or low
 char* getPowerSource(){
-    if(batteryPercentage <= 20){
+    // Switch to main power when battery is low
+    if(batteryPercentage <= LOW_BATTERY_PERCENTAGE){
         powerSource = POWER_SOURCE_MAIN;
         LOG_INFO("Battery below 20%%\n");
     }
+
     if(powerSource == POWER_SOURCE_BATTERY){
+    // Set the right pins when battery is the power source
         GPIO_write(CONFIG_GPIO_0, CONFIG_GPIO_LED_OFF);
         GPIO_write(CONFIG_GPIO_1, CONFIG_GPIO_LED_OFF);
 
@@ -387,6 +396,7 @@ char* getPowerSource(){
 
         return "Battery Power";
     } else if(powerSource == POWER_SOURCE_MAIN){
+    // Set the right pins when the main power is the power source
         GPIO_write(CONFIG_GPIO_0, CONFIG_GPIO_LED_ON);
         GPIO_write(CONFIG_GPIO_1, CONFIG_GPIO_LED_ON);
 
@@ -409,7 +419,9 @@ void timerLEDCallback(Timer_Handle myHandle)
     GPIO_toggle(CONFIG_GPIO_LED_0);
 }
 
+// this timer callback will read the adc, calculate the batterypercentage and send the data every X seconds, which is defined at the top as SEND_DATA_PERIOD
 void timerSendDataCallback(Timer_Handle myHandle){
+    // Read the adc input on P59 for the dc adc
     int_fast16_t res;
     res = ADC_convert(adc0, &adcValue0);
 
@@ -423,6 +435,8 @@ void timerSendDataCallback(Timer_Handle myHandle){
         LOG_ERROR("CONFIG_ADC_0 convert failed\n");
     }
 
+    // Read the adc input on P60 for the ac adc
+    // Not connected yet
     res = ADC_convert(adc1, &adcValue1);
 
     if (res == ADC_STATUS_SUCCESS) {
@@ -435,6 +449,8 @@ void timerSendDataCallback(Timer_Handle myHandle){
         LOG_ERROR("CONFIG_ADC_1 convert failed\n");
     }
 
+    // Calculate the batterypercentage according to the tested bit values
+    // 3740 is 100% and 2880 is 0%
     if(adcValue0 < 2880){
         batteryPercentage = 0;
     } else{
@@ -444,6 +460,7 @@ void timerSendDataCallback(Timer_Handle myHandle){
     LOG_INFO("Battery Percentage: %f\n", batteryPercentage);
     LOG_INFO("Powersource: %s\n", getPowerSource());
 
+    // Only when the MQTT server is connected, send the data, to prevent a queue of unsent data
     if(connected){
         int ret;
         struct msgQueue queueElement;
@@ -456,6 +473,7 @@ void timerSendDataCallback(Timer_Handle myHandle){
     }
 }
 
+// Callback function to switch the power source when SW2 is pushed
 void pushButtonChangePowerSourceHandler(uint_least8_t index){
     GPIO_disableInt(CONFIG_GPIO_BUTTON_0);
 
@@ -587,6 +605,7 @@ void BrokerCB(char* topic, char* payload, uint8_t qos){
     LOG_INFO("TOPIC: %s PAYLOAD: %s QOS: %d\r\n", topic, payload, qos);
 }
 
+// Callback function to switch the power source when a message is received in the "HybridLighting/Power/Toggle" channel
 void TogglePowerCB(char* topic, char* payload, uint8_t qos){
     if(powerSource == POWER_SOURCE_BATTERY){
         powerSource = POWER_SOURCE_MAIN;
@@ -836,8 +855,9 @@ void mainThread(void * args)
         while(1);
     }
 
+    // Configure the timer to read the analog inputs and send the data every few seconds, defined on top as SEND_DATA_PERIOD
     Timer_Params_init(&params1);
-    params1.period = 2000000;
+    params1.period = SEND_DATA_PERIOD;
     params1.periodUnits = Timer_PERIOD_US;
     params1.timerMode = Timer_CONTINUOUS_CALLBACK;
     params1.timerCallback = (Timer_CallBackFxn)timerSendDataCallback;
@@ -938,6 +958,7 @@ void mainThread(void * args)
 /* AP Connection Success, continue MQTT Application */
 MQTT_DEMO:
 
+    // Set the power source on Main in the beginning, so the pins P03 and P61 have a high signal, needed for the system to start
     batteryPercentage = 100;
     powerSource = POWER_SOURCE_MAIN;
 
@@ -989,7 +1010,7 @@ MQTT_DEMO:
             mq_receive(appQueue, (char*)&queueElement, sizeof(struct msgQueue), NULL);
 
             if(queueElement.event == APP_MQTT_PUBLISH){
-
+                // Publish batterypercentage and the current power source to the right MQTT channels
                 LOG_INFO("APP_MQTT_PUBLISH\r\n");
 
                 snprintf(batteryPercentageString, sizeof batteryPercentageString, "%.2f\r\n", batteryPercentage);
