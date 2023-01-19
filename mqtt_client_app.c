@@ -425,24 +425,39 @@ void timerSendDataCallback(Timer_Handle myHandle){
     }
 }
 
-void pushButtonPublishHandler(uint_least8_t index)
-{
-    int ret;
-    struct msgQueue queueElement;
-
+void pushButtonChangePowerSourceHandler(uint_least8_t index){
     GPIO_disableInt(CONFIG_GPIO_BUTTON_0);
 
-    queueElement.event = APP_MQTT_PUBLISH;
-    ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
-    if(ret < 0){
-        LOG_ERROR("msg queue send error %d", ret);
+    LOG_INFO("Button pushed, change power source\n");
+    if(powerSource == POWER_SOURCE_BATTERY){
+        powerSource = POWER_SOURCE_MAIN;
+    } else if(powerSource == POWER_SOURCE_MAIN){
+        powerSource = POWER_SOURCE_BATTERY;
     }
-    queueElement.event = APP_OTA_TRIGGER;
-    ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
-    if(ret < 0){
-        LOG_ERROR("msg queue send error %d", ret);
-    }
+
+    GPIO_clearInt(CONFIG_GPIO_BUTTON_0);
+    GPIO_enableInt(CONFIG_GPIO_BUTTON_0);
 }
+
+
+//void pushButtonPublishHandler(uint_least8_t index)
+//{
+//    int ret;
+//    struct msgQueue queueElement;
+//
+//    GPIO_disableInt(CONFIG_GPIO_BUTTON_0);
+//
+//    queueElement.event = APP_MQTT_PUBLISH;
+//    ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
+//    if(ret < 0){
+//        LOG_ERROR("msg queue send error %d", ret);
+//    }
+//    queueElement.event = APP_OTA_TRIGGER;
+//    ret = mq_send(appQueue, (const char*)&queueElement, sizeof(struct msgQueue), 0);
+//    if(ret < 0){
+//        LOG_ERROR("msg queue send error %d", ret);
+//    }
+//}
 
 void pushButtonConnectionHandler(uint_least8_t index)
 {
@@ -842,7 +857,8 @@ void mainThread(void * args)
     Timer_init();
     ADC_init();
 
-    GPIO_setCallback(CONFIG_GPIO_BUTTON_0, pushButtonPublishHandler);
+    GPIO_setCallback(CONFIG_GPIO_BUTTON_0, pushButtonChangePowerSourceHandler);
+//    GPIO_setCallback(CONFIG_GPIO_BUTTON_0, pushButtonPublishHandler);
     GPIO_setCallback(CONFIG_GPIO_BUTTON_1, pushButtonConnectionHandler);
 
     GPIO_write(CONFIG_GPIO_LED_0, CONFIG_GPIO_LED_OFF);

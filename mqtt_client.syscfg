@@ -19,11 +19,13 @@ const Crypto         = scripting.addModule("/ti/drivers/Crypto");
 const Crypto1        = Crypto.addInstance();
 const DMA            = scripting.addModule("/ti/drivers/DMA");
 const GPIO           = scripting.addModule("/ti/drivers/GPIO");
-const GPIO1          = GPIO.addInstance();
-const GPIO2          = GPIO.addInstance();
 const GPIO3          = GPIO.addInstance();
 const GPIO4          = GPIO.addInstance();
 const GPIO5          = GPIO.addInstance();
+const GPIO6          = GPIO.addInstance();
+const GPIO7          = GPIO.addInstance();
+const GPIO8          = GPIO.addInstance();
+const GPIO9          = GPIO.addInstance();
 const Power          = scripting.addModule("/ti/drivers/Power");
 const SPI            = scripting.addModule("/ti/drivers/SPI");
 const SPI1           = SPI.addInstance();
@@ -69,27 +71,39 @@ ADC2.$hardware = system.deviceData.board.components.OPA4342.subComponents.AIN4;
 
 Crypto1.$name = "CONFIG_Crypto_0";
 
-GPIO1.$hardware        = system.deviceData.board.components.SW2;
-GPIO1.$name            = "CONFIG_GPIO_BUTTON_0";
-GPIO1.interruptTrigger = "Rising Edge";
-GPIO1.gpioPin.$assign  = "boosterpack.3";
+GPIO3.$hardware        = system.deviceData.board.components.SW2;
+GPIO3.$name            = "CONFIG_GPIO_BUTTON_0";
+GPIO3.interruptTrigger = "Rising Edge";
+GPIO3.gpioPin.$assign  = "boosterpack.3";
 
-GPIO2.$hardware        = system.deviceData.board.components.SW3;
-GPIO2.$name            = "CONFIG_GPIO_BUTTON_1";
-GPIO2.interruptTrigger = "Rising Edge";
-GPIO2.gpioPin.$assign  = "boosterpack.11";
+GPIO4.$hardware        = system.deviceData.board.components.SW3;
+GPIO4.$name            = "CONFIG_GPIO_BUTTON_1";
+GPIO4.interruptTrigger = "Rising Edge";
+GPIO4.gpioPin.$assign  = "boosterpack.11";
 
-GPIO3.$hardware      = system.deviceData.board.components.LED_RED;
-GPIO3.outputStrength = "High";
-GPIO3.$name          = "CONFIG_GPIO_LED_0";
-
-GPIO4.$hardware      = system.deviceData.board.components.LED_YELLOW;
-GPIO4.outputStrength = "High";
-GPIO4.$name          = "CONFIG_GPIO_LED_1";
-
-GPIO5.$hardware      = system.deviceData.board.components.LED_GREEN;
+GPIO5.$hardware      = system.deviceData.board.components.LED_RED;
 GPIO5.outputStrength = "High";
-GPIO5.$name          = "CONFIG_GPIO_LED_2";
+GPIO5.$name          = "CONFIG_GPIO_LED_0";
+
+GPIO6.$hardware      = system.deviceData.board.components.LED_YELLOW;
+GPIO6.outputStrength = "High";
+GPIO6.$name          = "CONFIG_GPIO_LED_1";
+
+GPIO7.$hardware      = system.deviceData.board.components.LED_GREEN;
+GPIO7.outputStrength = "High";
+GPIO7.$name          = "CONFIG_GPIO_LED_2";
+
+GPIO8.$name              = "CONFIG_GPIO_0";
+GPIO8.mode               = "Output";
+GPIO8.outputStrength     = "High";
+GPIO8.initialOutputState = "High";
+GPIO8.gpioPin.$assign    = "boosterpack.4";
+
+GPIO9.$name              = "CONFIG_GPIO_1";
+GPIO9.mode               = "Output";
+GPIO9.outputStrength     = "High";
+GPIO9.initialOutputState = "High";
+GPIO9.gpioPin.$assign    = "boosterpack.5";
 
 Power.ioRetentionShutdown = ["GRP_1"];
 Power.parkPins.$name      = "ti_drivers_power_PowerCC32XXPins0";
@@ -139,6 +153,6 @@ ADC1.adc.$suggestSolution        = "ADC0";
 ADC1.adc.adcPin.$suggestSolution = "boosterpack.26";
 ADC2.adc.$suggestSolution        = "ADC0";
 ADC2.adc.adcPin.$suggestSolution = "boosterpack.24";
-GPIO3.gpioPin.$suggestSolution   = "boosterpack.29";
-GPIO4.gpioPin.$suggestSolution   = "boosterpack.9";
-GPIO5.gpioPin.$suggestSolution   = "boosterpack.10";
+GPIO5.gpioPin.$suggestSolution   = "boosterpack.29";
+GPIO6.gpioPin.$suggestSolution   = "boosterpack.9";
+GPIO7.gpioPin.$suggestSolution   = "boosterpack.10";
